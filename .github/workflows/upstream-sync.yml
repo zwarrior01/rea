@@ -1,0 +1,52 @@
+name: Upstream REA sync
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-rea-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Prepare upstream changes safely
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/morluto/rea.git
+          git fetch upstream main
+          git fetch origin main
+          git checkout -B sync/upstream-main origin/main
+          if git merge-base --is-ancestor upstream/main origin/main; then
+            echo "Fork already contains upstream changes."
+            exit 0
+          fi
+          # A conflicting upstream change causes the job to fail without changing main.
+          git merge --no-edit upstream/main
+          git push --force origin sync/upstream-main
+          if ! git diff --quiet origin/main...HEAD; then
+            if ! gh pr list --state open --base main --head sync/upstream-main --json number --jq '.[0].number' | grep -q '[0-9]'; then
+              gh pr create \
+                --base main \
+                --head sync/upstream-main \
+                --title "Sync updates from morluto/rea" \
+                --body "Automated upstream synchronization from https://github.com/morluto/rea. Review changes and tests before merging. Your main branch is never updated automatically."
+            fi
+          fi
